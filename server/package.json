@@ -1,0 +1,13 @@
+{
+  "name": "worker-tracker-server",
+  "version": "1.0.0",
+  "description": "Central reporting and device-management server for Worker Tracker.",
+  "main": "src/index.js",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test --test-force-exit"
+  }
+}
