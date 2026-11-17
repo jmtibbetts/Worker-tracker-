@@ -121,6 +121,7 @@ async function refresh() {
   }
   render();
   if (state.pendingIdle && !modal.open) showIdlePrompt(state.pendingIdle.seconds);
+  else if (state.managed && state.managed.managed && !state.settings.consentAt && !modal.open) showConsentPrompt();
 }
 
 // ---------------------------------------------------------------- views
@@ -131,9 +132,23 @@ function render() {
   $('#navStatus').innerHTML = running
     ? `<span class="dot on"></span>Tracking`
     : `<span class="dot"></span>Not tracking`;
-  main.innerHTML = { timer: viewTimer, timesheet: viewTimesheet, reports: viewReports, projects: viewProjects, invoices: viewInvoices, settings: viewSettings }[view]();
+  main.innerHTML = managedBanner() + { timer: viewTimer, timesheet: viewTimesheet, reports: viewReports, projects: viewProjects, invoices: viewInvoices, settings: viewSettings }[view]();
   applyDynamicStyles(main);
   if (view === 'timer') updateClock();
+}
+
+function managedBanner() {
+  const m = state.managed;
+  if (!m || !m.managed) return '';
+  const org = esc(m.orgName || 'your organization');
+  if (m.state === 'deactivated' || m.state === 'purged') {
+    return `<div class="mbanner stop">This device has been ${m.state === 'purged' ? 'wiped and ' : ''}deactivated by ${org}. Tracking has stopped.</div>`;
+  }
+  if (state.trackingBlocked) {
+    return `<div class="mbanner warn">Tracking is <b>paused by your administrator</b> at ${org}. The timer is disabled until they resume it.</div>`;
+  }
+  const where = m.state === 'offline' ? ' · can\'t reach server, recording locally' : '';
+  return `<div class="mbanner">Managed by <b>${org}</b> · reporting to ${esc(m.serverUrl)} as ${esc(m.employeeEmail)}${where}</div>`;
 }
 
 function liveHtml() {
@@ -175,7 +190,7 @@ function viewTimer() {
       <select id="timerProject" ${r ? 'disabled' : ''} aria-label="Project">${projectOptions(projectId)}</select>
       <input id="timerTask" placeholder="What are you working on?" value="${esc(r ? r.entry.task : draft.task)}" ${r ? 'disabled' : ''} aria-label="Task">
     </div>
-    <button class="big ${r ? 'stop' : 'go'}" data-action="${r ? 'stop' : 'start'}">${r ? 'Stop' : 'Start'}</button>
+    <button class="big ${r ? 'stop' : 'go'}" data-action="${r ? 'stop' : 'start'}" ${!r && state.trackingBlocked ? 'disabled title="Paused by your administrator"' : ''}>${r ? 'Stop' : 'Start'}</button>
   </div>
   <div class="grid">
     <div class="card"><h2>Today</h2><div class="stat" id="todayStat">${hm(todaySec)}</div><div class="muted small">${money(todayAmount)}</div></div>
@@ -417,6 +432,8 @@ function viewSettings() {
 
   <div class="card" id="permissions" hidden></div>
 
+  ${managedCard()}
+
   <div class="card"><h2>What this app records</h2>
     <p>Worker Tracker only records while <b>you</b> have started the timer, and it is always visible in the tray / menu bar.</p>
     <ul class="plain">
@@ -553,6 +570,52 @@ function confirmDialog(title, message, label, onConfirm) {
   openModal(`<h1>${esc(title)}</h1><p>${esc(message)}</p><div class="dialog-actions"><button value="cancel">Cancel</button><button class="primary" value="ok">${esc(label)}</button></div>`, onConfirm);
 }
 
+function managedCard() {
+  const m = state.managed || {};
+  if (!m.managed) {
+    return `<div class="card"><h2>Managed mode (enterprise)</h2>
+      <p class="small">Connect this device to a central Worker Tracker server so an administrator receives time, activity and AI-usage reports and can manage the device remotely. Enrollment is normally done by IT during setup.</p>
+      <form id="enrollForm" class="form">
+        <label class="field">Server address<input name="serverUrl" placeholder="https://tracker.yourcompany.com" required></label>
+        <label class="field">Your work email<input name="employeeEmail" type="email" placeholder="you@company.com" required></label>
+        <label class="field wide">Enrollment token<input name="enrollmentToken" placeholder="from your administrator" required></label>
+        <div class="wide"><button class="primary" type="submit">Enroll this device</button></div>
+      </form>
+      <p class="muted small">Enrolling turns on monitoring and shows you exactly what is collected before any data is sent.</p></div>`;
+  }
+  const dead = m.state === 'deactivated' || m.state === 'purged';
+  const statusPill = dead ? `<span class="pill warn">${esc(m.state)}</span>`
+    : state.trackingBlocked ? '<span class="pill warn">paused by admin</span>'
+    : m.state === 'offline' ? '<span class="pill warn">offline — recording locally</span>' : '<span class="pill accent">connected</span>';
+  return `<div class="card"><h2>Managed mode (enterprise)</h2>
+    <div class="row"><div>Reporting to <b>${esc(m.orgName || 'your organization')}</b> ${statusPill}</div></div>
+    <ul class="plain small">
+      <li>Server: ${esc(m.serverUrl)}</li>
+      <li>Enrolled as: ${esc(m.employeeEmail)}</li>
+      <li>Last successful sync: ${m.lastSync ? esc(new Date(m.lastSync).toLocaleString()) : 'not yet'}</li>
+      ${m.lastError ? `<li class="muted">Last error: ${esc(m.lastError)}</li>` : ''}
+    </ul>
+    <p class="muted small">Your administrator can pause tracking or erase this device's data remotely. Only summaries are sent — never window titles, typed text or browser addresses.</p>
+    ${dead ? '' : '<div class="row"><button type="button" data-action="managedSync">Sync now</button><button type="button" class="danger" data-action="managedLeave">Disable managed mode</button></div>'}</div>`;
+}
+
+function showConsentPrompt() {
+  const org = esc((state.managed && state.managed.orgName) || 'your organization');
+  openModal(
+    `<h1>Workplace monitoring notice</h1>
+    <p>This computer is enrolled in <b>${org}</b>'s Worker Tracker. While you run the timer, the app records and sends to your employer's server:</p>
+    <ul class="plain">
+      <li>start/stop times, active and idle time;</li>
+      <li>which applications were in the foreground, and for how long;</li>
+      <li>how long AI tools were used and which ones, tied to the project/task you selected;</li>
+      <li>screenshots, only if your administrator has enabled them.</li>
+    </ul>
+    <p class="muted small">Window titles, typed text and browser addresses are <b>not</b> sent. The app stays visible in your tray/menu bar whenever it is recording. Your administrator can pause or stop tracking and can erase this device's data remotely. Questions about this program should go to your employer.</p>
+    <div class="dialog-actions"><button class="primary" value="ok">I understand</button></div>`,
+    () => call('managed:consent')
+  );
+}
+
 // ---------------------------------------------------------------- events
 
 function updateClock() {
@@ -618,6 +681,12 @@ document.addEventListener('click', async (ev) => {
       break;
     }
     case 'openPermission': await call('permissions:open', { pane: el.dataset.pane }); break;
+    case 'managedSync':
+      try { await call('managed:syncNow'); toast('Synced with server'); } catch { /* shown */ }
+      break;
+    case 'managedLeave':
+      confirmDialog('Disable managed mode?', 'This device will stop reporting to the server. Your administrator may re-enroll it or act on the server side. Local tracking continues.', 'Disable', () => call('managed:leave'));
+      break;
   }
 });
 
@@ -644,6 +713,15 @@ document.addEventListener('change', async (ev) => {
 });
 
 document.addEventListener('submit', async (ev) => {
+  if (ev.target.id === 'enrollForm') {
+    ev.preventDefault();
+    const f = Object.fromEntries(new FormData(ev.target));
+    try {
+      await call('managed:enroll', { serverUrl: f.serverUrl, employeeEmail: f.employeeEmail, enrollmentToken: f.enrollmentToken });
+      toast('Device enrolled');
+    } catch { /* error shown via toast */ }
+    return;
+  }
   if (ev.target.id !== 'settingsForm') return;
   ev.preventDefault();
   const form = ev.target;
@@ -669,6 +747,13 @@ api.on('changed', () => {
 });
 api.on('idle-return', ({ seconds }) => showIdlePrompt(seconds));
 api.on('auto-stopped', ({ minutes }) => toast(`Timer stopped automatically after ${minutes} minutes without input`));
+api.on('managed-state', (status) => {
+  if (!state) return;
+  const was = state.managed && state.managed.state;
+  state.managed = status;
+  // A remote deactivate/purge or pause should surface immediately, even mid-typing.
+  if (status.state !== was || (view !== 'settings')) refresh();
+});
 
 [range.from, range.to] = presetRange('week');
 refresh();

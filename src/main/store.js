@@ -24,6 +24,9 @@ const DEFAULT_SETTINGS = {
   invoiceTaxPct: 0,
   invoiceTerms: 'Payment due within 30 days.',
   minimizeToTray: true,
+  // Managed (enterprise) mode. Off until a device is enrolled with a server.
+  managedMode: false,
+  consentAt: 0,
 };
 
 function emptyDb() {
@@ -35,6 +38,7 @@ function emptyDb() {
     invoices: [],
     invoiceSeq: 0,
     audit: [],
+    managed: {}, // enterprise enrollment: serverUrl, deviceId, deviceKey, employeeEmail, ...
   };
 }
 

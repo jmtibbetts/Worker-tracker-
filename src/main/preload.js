@@ -13,8 +13,9 @@ const INVOKE_CHANNELS = new Set([
   'screenshot:delete',
   'permissions:get', 'permissions:open',
   'data:openFolder',
+  'managed:status', 'managed:enroll', 'managed:consent', 'managed:syncNow', 'managed:leave',
 ]);
-const EVENTS = new Set(['tick', 'changed', 'idle-return', 'auto-stopped']);
+const EVENTS = new Set(['tick', 'changed', 'idle-return', 'auto-stopped', 'managed-state']);
 
 contextBridge.exposeInMainWorld('api', {
   invoke(channel, payload) {

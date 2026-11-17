@@ -2,13 +2,17 @@
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, shell, nativeImage, powerMonitor, desktopCapturer, screen, systemPreferences } = require('electron');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
 const { Store, DEFAULT_SETTINGS, newId } = require('./store');
 const { Tracker } = require('./tracker');
+const { Sync } = require('./sync');
 const activeWindow = require('./activeWindow');
 const reports = require('../shared/reports');
+
+let sync = null;
 
 const ASSETS = path.join(__dirname, '..', '..', 'assets');
 
@@ -81,11 +85,26 @@ function publicState() {
     running: tracker.snapshot(),
     pendingIdle: tracker.pendingIdle,
     audit: d.audit.slice(-200).reverse(),
+    managed: sync ? sync.status() : { managed: false },
+    trackingBlocked: tracker.blockedReason || null,
     platform: process.platform,
     version: app.getVersion(),
     dataDir: store.dir,
     now: Date.now(),
   };
+}
+
+/** Erase every local trace of tracking: entries, screenshots and the on-disk database copy. */
+function purgeLocalData() {
+  const count = store.data.entries.length;
+  if (tracker.isRunning()) tracker.stop('purged');
+  fs.rmSync(store.screenshotDir, { recursive: true, force: true });
+  fs.mkdirSync(store.screenshotDir, { recursive: true });
+  store.data.entries = [];
+  store.data.invoices = [];
+  store.data.invoiceSeq = 0;
+  store.saveNow();
+  return count;
 }
 
 function withScreenshotUrls(entry) {
@@ -121,6 +140,7 @@ function registerIpc() {
 
   // ---- timer
   handle('timer:start', ({ projectId, task, notes }) => {
+    if (sync && sync.isManaged() && !store.data.settings.consentAt) throw new Error('Please acknowledge the monitoring notice before starting.');
     if (projectId && !store.data.projects.some((p) => p.id === projectId && !p.archived)) throw new Error('Project not found');
     tracker.start({ projectId, task, notes });
     return publicState();
@@ -348,6 +368,41 @@ function registerIpc() {
     if (panes[pane]) shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${panes[pane]}`);
   });
   handle('data:openFolder', () => shell.openPath(store.dir));
+
+  // ---- managed (enterprise) mode
+  handle('managed:status', () => (sync ? sync.status() : { managed: false }));
+  handle('managed:enroll', async ({ serverUrl, enrollmentToken, employeeEmail }) => {
+    const status = await sync.enroll({ serverUrl, enrollmentToken, employeeEmail });
+    send('changed');
+    return status;
+  });
+  handle('managed:consent', () => {
+    const now = Date.now();
+    store.data.settings.consentAt = now;
+    if (sync) sync.cfg.consentAt = now;
+    store.audit('managed.consent', 'Employee acknowledged the monitoring notice');
+    store.saveNow();
+    send('changed');
+    return { consentAt: now };
+  });
+  handle('managed:syncNow', async () => {
+    if (!sync || !sync.isEnrolled()) throw new Error('This device is not enrolled.');
+    await sync.reportOnce();
+    await sync.pollOnce();
+    return sync.status();
+  });
+  // Local opt-out of managed mode. Allowed only while no server policy forbids it; the
+  // administrator retains the authoritative deactivate/purge controls server-side.
+  handle('managed:leave', () => {
+    if (sync) sync.stop();
+    tracker.setBlocked(null);
+    store.data.settings.managedMode = false;
+    store.data.managed = {};
+    store.audit('managed.left', 'Managed mode disabled on this device');
+    store.saveNow();
+    send('changed');
+    return publicState();
+  });
 }
 
 // ---------------------------------------------------------------- window + tray
@@ -451,9 +506,31 @@ if (!app.requestSingleInstanceLock()) {
       captureScreenshot,
       emit: send,
     });
+    sync = new Sync({
+      store,
+      fetch: (...a) => fetch(...a),
+      emit: (event, payload) => {
+        if (event === 'managed-state') refreshTray();
+        send(event, payload);
+      },
+      // An administrator's pause / resume / deactivate directive controls the tracker.
+      onDirective: ({ trackingEnabled }) => {
+        tracker.setBlocked(trackingEnabled ? null : 'Tracking has been paused by your administrator.');
+        send('changed');
+      },
+      purgeLocalData,
+      deviceInfo: () => ({ hostname: os.hostname(), platform: process.platform, appVersion: app.getVersion() }),
+    });
     registerIpc();
     createWindow();
     createTray();
+
+    // Resume managed mode across restarts, applying the last known pause state immediately.
+    if (sync.isManaged() && sync.isEnrolled()) {
+      if (store.data.managed.trackingEnabled === false) tracker.setBlocked('Tracking has been paused by your administrator.');
+      if (store.data.settings.consentAt) sync.cfg.consentAt = store.data.settings.consentAt;
+      sync.start();
+    }
 
     // Locking the screen or suspending stops billable time straight away.
     const pause = (why) => () => {

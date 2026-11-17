@@ -44,7 +44,17 @@ class Tracker {
     return !!this.entry;
   }
 
+  /** In managed mode an administrator can pause tracking; blocked means "do not collect". */
+  setBlocked(reason) {
+    this.blockedReason = reason || null;
+    if (reason && this.entry) this.stop('admin-paused');
+  }
+  isBlocked() {
+    return !!this.blockedReason;
+  }
+
   start({ projectId = '', task = '', notes = '' } = {}) {
+    if (this.blockedReason) throw new Error(this.blockedReason);
     if (this.entry) this.stop('switch');
     const now = this.now();
     this.entry = {

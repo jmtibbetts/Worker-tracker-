@@ -119,3 +119,6 @@ dialog h1 { margin-bottom: 14px; }
 #toast.error { background: var(--stop); }
 ul.plain { margin: 6px 0 0; padding-left: 18px; }
 ul.plain li { margin: 3px 0; }
+.mbanner { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--text); border-radius: 10px; padding: 9px 14px; margin-bottom: 16px; font-size: 13px; }
+.mbanner.warn { border-color: var(--warn); background: transparent; color: var(--warn); }
+.mbanner.stop { border-color: var(--stop); background: transparent; color: var(--stop); }

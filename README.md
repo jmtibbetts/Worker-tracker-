@@ -1,11 +1,19 @@
 # Worker Tracker
 
-A desktop time tracker for contractors that runs on **Windows** and **macOS**. It records
-working time, activity levels, which applications were used, and **how much of the work
-involved AI tools** — then turns that into timesheets and invoices.
+A desktop time tracker that runs on **Windows** and **macOS**. It records working time,
+activity levels, which applications were used, and **how much of the work involved AI tools** —
+then turns that into timesheets and invoices.
 
-Everything is stored on the contractor's own computer. Nothing is uploaded; data is shared by
-exporting a timesheet (CSV) or an invoice (PDF).
+It works in two modes:
+
+- **Standalone** (default) — for an individual contractor. Everything stays on their own
+  computer; nothing is uploaded. Data is shared by exporting a timesheet (CSV) or invoice (PDF).
+- **Managed / enterprise** — the agent is enrolled with a central [server](server/) so an
+  organization can collect per-employee time, activity and AI-usage reports and manage devices
+  remotely (pause, deactivate, or wipe on offboarding). Managed mode is **off until a device is
+  explicitly enrolled**, requires the employee to acknowledge a monitoring notice, and keeps the
+  app visible the whole time it records. See [Managed mode](#managed-mode-enterprise) and, before
+  you deploy it, [Legal and consent](#legal-and-consent).
 
 ## Features
 
@@ -110,7 +118,66 @@ Limits worth knowing:
 - Detection is keyword based, so an unrelated page whose title contains a tool's name can be
   counted. Entries show which tool was matched so this can be checked.
 
-## Privacy
+## Managed mode (enterprise)
+
+In managed mode each agent reports to the central [server](server/) and an administrator
+manages it from a web console. Set the server up first (see [`server/README.md`](server/README.md)),
+then enroll a workstation in the agent under **Settings → Managed mode** with the server
+address, the employee's email, and the enrollment token from the console.
+
+What enrollment does, by design, transparently:
+
+- The employee sees a one-time **monitoring notice** describing exactly what is collected and
+  must acknowledge it before the timer will start; the acknowledgement is recorded.
+- A persistent banner shows the app is managed and names the organization and server.
+- The app stays visible in the tray / menu bar whenever it records. There is **no hidden or
+  stealth mode**, and the agent is a normal, uninstallable application.
+
+What the agent sends to the server (summaries only, once a minute while enrolled):
+
+- per session: project/task, start/end, active / idle / AI seconds, seconds per application,
+  seconds per AI tool, and the names of AI apps seen running.
+
+What it never sends: window titles, typed text or keystrokes, browser addresses, or
+screenshots. (Screenshots, if enabled, stay on the employee's own device.)
+
+What an administrator can do from the console:
+
+- see per-employee time, activity and a full **AI-usage breakdown** (by tool and by project);
+- **pause / resume** collection on a device;
+- **deactivate** a device (stop and unenroll);
+- **wipe & purge** a device — the agent erases all tracking data stored locally on it and then
+  deactivates. Use this for firing / offboarding. This erases *the agent's own data on that
+  machine*; it does not touch the employee's other files, and the server has no ability to run
+  arbitrary commands on enrolled machines.
+
+Remote commands apply the next time the device checks in (within about a minute while online).
+A device that is offline keeps recording locally and syncs — and applies any pending pause or
+purge — when it reconnects.
+
+## Legal and consent
+
+Employee monitoring is regulated, and the rules differ widely by country, state and employment
+contract. Deploying the managed mode is a decision with legal weight. Before you roll it out:
+
+- **Tell employees, in writing, before monitoring starts** what is collected, why, how long it
+  is kept, and who can see it. Many jurisdictions require prior notice; several require consent,
+  a legitimate-interest assessment, works-council or union consultation, or a data-protection
+  impact assessment.
+- **Monitor only during working hours and only for a legitimate business purpose.** This tool
+  records solely while the employee runs the timer and shows them when it is active; keep it
+  that way. Do not attempt to make it covert — that is both against this project's design and
+  unlawful in many places.
+- **Minimise and secure the data.** Run the server over HTTPS with restricted access, limit who
+  can view reports, set a retention period, and delete data you no longer need (the console has
+  a per-employee delete; offboarding should include a wipe & purge and a server-side delete).
+- **Get advice.** Treat the above as a prompt to consult qualified legal/HR counsel for your
+  jurisdictions, not as legal advice.
+
+This software is provided to help you run a transparent program; using it in a way that
+violates employees' rights or applicable law is the operator's responsibility.
+
+## Privacy (standalone mode)
 
 - Recording only happens while the timer is running, and the app is always visible in the
   tray / menu bar. There is no hidden mode.
@@ -119,9 +186,8 @@ Limits worth knowing:
   seconds per AI tool, and screenshots if enabled.
 - Data location: `%APPDATA%\Worker Tracker\data` on Windows and
   `~/Library/Application Support/Worker Tracker/data` on macOS (*Settings → Open data folder*).
-
-If you ask contractors to use this app, tell them what it records and check the monitoring
-and consent rules that apply where they work.
+- In managed mode, summaries are additionally sent to the server your organization configured;
+  see [Managed mode](#managed-mode-enterprise) for exactly what is and is not transmitted.
 
 ## Project layout
 
@@ -130,11 +196,13 @@ src/main/main.js          app lifecycle, window, tray, IPC handlers
 src/main/tracker.js       sampling engine: active / idle / applications / AI
 src/main/activeWindow.js  foreground window and process list per platform
 src/main/store.js         local JSON database
+src/main/sync.js          managed mode: enrollment, reporting, remote commands
 src/main/preload.js       bridge between UI and main process
 src/shared/aiDetector.js  AI tool list and matching
 src/shared/reports.js     summaries, CSV export, invoice rendering
 src/renderer/             user interface
-test/                     unit tests
+test/                     unit tests (agent + managed-mode integration)
+server/                   central reporting & device-management server (see server/README.md)
 ```
 
 ## Tests
@@ -145,7 +213,11 @@ npm test
 
 ## Known limitations
 
-- Single user, single computer; there is no server or team dashboard.
 - Activity is based on whether input occurred in each sample, not on input counts.
 - Entries are attributed to the day they start on.
-- Screenshots capture the primary display only.
+- Screenshots capture the primary display only, and are never uploaded.
+- The reference server uses embedded SQLite and a single admin role; for large fleets, put it
+  behind HTTPS with restricted access and consider PostgreSQL (see `server/README.md`).
+- The platform window/process code (macOS AppleScript, the Windows PowerShell helper) and the
+  live networked agent↔server flow are covered by automated tests but should be validated on
+  real Windows and macOS hardware before a production rollout.
